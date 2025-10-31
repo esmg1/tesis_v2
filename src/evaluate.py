@@ -10,7 +10,7 @@ def eval_dstm():
     metrics={}
     if Path("artifacts/dstm_idata.nc").exists():
         idata = az.from_netcdf("artifacts/dstm_idata.nc")
-        waic = az.waic(idata).elpd_waic.values
+        waic = az.waic(idata).elpd_waic
         metrics["waic"] = float(waic)
     if Path("artifacts/dstm_forecast.parquet").exists():
         d = pd.read_parquet("artifacts/dstm_forecast.parquet")

@@ -1,16 +1,23 @@
-import argparse, pandas as pd, os
+import argparse
+import os
 from pathlib import Path
 
+import pandas as pd
+
+from data_utils import ensure_curated_events
+
 def load_curated():
-    p = Path("data/curated/events.parquet")
-    if not p.exists():
-        raise SystemExit("Missing data/curated/events.parquet with [region,date,y].")
+    p = ensure_curated_events()
     df = pd.read_parquet(p)
     df["date"] = pd.to_datetime(df["date"])
     return df
 
 def run_dstm(df):
-    import numpy as np, pymc as pm, arviz as az
+    import numpy as np
+    import arviz as az
+    import pymc as pm
+
+    Path("artifacts").mkdir(exist_ok=True)
     # Aggregate by (region, month) as a simple starter; you can swap to daily.
     g = df.assign(month=df["date"].dt.to_period("M").dt.to_timestamp()) \
           .groupby(["region","month"], as_index=False)["y"].sum()
@@ -28,9 +35,7 @@ def run_dstm(df):
         # Temporal component: AR(1) on latent log-intensity shared across regions
         rho = pm.Uniform("rho", -0.95, 0.95)
         sigma_t = pm.Exponential("sigma_t", 1.0)
-        z = pm.GaussianRandomWalk("z", sigma=sigma_t, shape=T)
-        z_ar = pm.Deterministic("z_ar", z[1:] - rho*z[:-1])
-        pm.Normal("z_ar_like", 0, sigma_t, observed=z_ar)  # enforce AR(1) increments
+        z = pm.AR("z", rho=[rho], sigma=sigma_t, shape=T)
 
         # Overdispersion
         phi = pm.Exponential("phi", 1.0)  # negbin concentration
@@ -39,12 +44,22 @@ def run_dstm(df):
         mu = pm.math.exp(eta)
         pm.NegativeBinomial("y", mu=mu, alpha=phi, observed=y)
 
-        idata = pm.sample(1000, tune=1000, target_accept=0.9, chains=2, random_seed=42)
+        idata = pm.sample(
+            200,
+            tune=200,
+            target_accept=0.99,
+            chains=2,
+            random_seed=42,
+            idata_kwargs={"log_likelihood": True},
+        )
+        ppc = pm.sample_posterior_predictive(idata, var_names=["y"], random_seed=43)
+        idata.extend(ppc)
+
         az.to_netcdf(idata, "artifacts/dstm_idata.nc")
 
-        # 1-step-ahead forecast by last month (toy demo)
-        g["y_hat"] = idata.posterior["y"].mean(("chain","draw")).values
-        Path("artifacts").mkdir(exist_ok=True)
+        # Posterior predictive mean for observed period
+        y_ppc = ppc.posterior_predictive["y"].mean(("chain", "draw")).values
+        g["y_hat"] = y_ppc
         g.to_parquet("artifacts/dstm_forecast.parquet")
     return "artifacts/dstm_forecast.parquet"
 
