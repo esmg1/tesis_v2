@@ -1,0 +1,7 @@
+pymc>=5,<6
+arviz>=0.17
+numpy>=1.26
+pandas>=2.2
+pyarrow>=17
+scikit-learn>=1.5
+properscoring>=0.1
